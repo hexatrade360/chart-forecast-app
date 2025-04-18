@@ -1,3 +1,5 @@
+# ✅ Force rebuild - updated port handling for Render
+
 from flask import Flask, request, render_template, redirect, url_for
 from PIL import Image
 import os
@@ -37,3 +39,4 @@ def reload_model():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+

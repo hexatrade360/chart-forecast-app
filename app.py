@@ -1,4 +1,4 @@
-# ✅ Final Render Fix: Force app to bind to dynamic $PORT using werkzeug
+# ✅ Debug Mode ON + Forecast Wrapped in Try/Except
 
 from flask import Flask, request, render_template, redirect, url_for
 from PIL import Image
@@ -7,6 +7,8 @@ from werkzeug.utils import secure_filename
 from forecast_engine import process_forecast_pipeline
 
 app = Flask(__name__)
+app.config['DEBUG'] = True  # 🔍 Enable debug mode for error tracebacks
+
 UPLOAD_FOLDER = "uploads"
 STATIC_FOLDER = "static"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -23,7 +25,12 @@ def index():
         file.save(filepath)
 
         query_img = Image.open(filepath).convert("RGB")
-        result_img = process_forecast_pipeline(query_img)
+
+        try:
+            result_img = process_forecast_pipeline(query_img)
+        except Exception as e:
+            print("🔥 Forecast pipeline crashed:", str(e))
+            raise
 
         result_path = os.path.join(STATIC_FOLDER, "result.png")
         result_img.save(result_path)
@@ -36,7 +43,7 @@ def index():
 def reload_model():
     return redirect(url_for("index"))
 
-# 🔥 Force proper binding using werkzeug + $PORT
+# Run via werkzeug to force correct port binding on Render
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     from werkzeug.serving import run_simple

@@ -1,4 +1,4 @@
-# ✅ Force rebuild - updated port handling for Render
+# ✅ Final Render Fix: Force app to bind to dynamic $PORT using werkzeug
 
 from flask import Flask, request, render_template, redirect, url_for
 from PIL import Image
@@ -36,7 +36,8 @@ def index():
 def reload_model():
     return redirect(url_for("index"))
 
+# 🔥 Force proper binding using werkzeug + $PORT
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
+    from werkzeug.serving import run_simple
+    run_simple("0.0.0.0", port, app)

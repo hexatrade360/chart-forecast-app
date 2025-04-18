@@ -1,1 +1,7 @@
-# Placeholder: requirements.txt already exists in your GitHub repo.
+flask
+pillow
+torch
+numpy
+opencv-python
+matplotlib
+scikit-learn

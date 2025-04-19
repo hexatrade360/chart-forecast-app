@@ -1,70 +1,60 @@
-import os
-from flask import Flask, request, render_template_string, send_from_directory
-from werkzeug.utils import secure_filename
-from PIL import Image
-from forecast_engine import process_forecast_pipeline
 
-UPLOAD_FOLDER = 'uploads'
-STATIC_FOLDER = 'static'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+import os
+from flask import Flask, request, render_template
+from forecast_engine import process_forecast_pipeline
+from PIL import Image
+import uuid
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['STATIC_FOLDER'] = STATIC_FOLDER
+app.config["UPLOAD_FOLDER"] = "uploads"
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(STATIC_FOLDER, exist_ok=True)
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == 'POST':
-        if 'screenshot' not in request.files:
-            return '❌ No file part'
-        file = request.files['screenshot']
-        if file.filename == '':
-            return '❌ No selected file'
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(file_path)
+    result_img = None
+    debug_steps = []
+    debug = False
+
+    if request.method == "POST":
+        print("🟡 POST request received")
+        if "query_image" not in request.files:
+            print("❌ No file part in the request.")
+            return "❌ No file part", 400
+        file = request.files["query_image"]
+        if file.filename == "":
+            print("❌ No selected file.")
+            return "❌ No selected file", 400
+        if file:
+            filename = file.filename
+            path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            file.save(path)
+            print(f"📂 Saved uploaded file to: {path}")
+            img = Image.open(path).convert("RGB")
+            debug = "debug" in request.form
 
             try:
-                img = Image.open(file_path).convert("RGB")
-                overlay, steps = process_forecast_pipeline(img, debug=True)
-
-                # Save result image
-                output_path = os.path.join(app.config['STATIC_FOLDER'], f"result_{filename}")
-                overlay.save(output_path)
-
-                # Build HTML debug output
-                html = f'<h2>✅ Forecast generated for: {filename}</h2>'
-                html += f'<h3>📈 Final Forecast Result:</h3><img src="/static/result_{filename}" width="600"><hr>'
-
-                for title, step_img in steps:
-                    step_name = f"{title.replace(' ','_').replace('#','')}_{filename}"
-                    step_path = os.path.join(app.config['STATIC_FOLDER'], step_name + ".png")
-                    step_img.save(step_path)
-                    html += f'<h4>{title}</h4><img src="/static/{step_name}.png" width="600"><br><br>'
-
-                return render_template_string(html)
+                result = process_forecast_pipeline(img, debug=debug)
+                if debug:
+                    result_img, steps = result
+                    uid = str(uuid.uuid4().hex)
+                    debug_steps = []
+                    for i, (label, step_img) in enumerate(steps):
+                        step_path = f"static/step_{uid}_{i}.png"
+                        step_img.save(step_path)
+                        debug_steps.append({"label": label, "url": step_path})
+                else:
+                    result_img = result
+                result_name = f"result_{uuid.uuid4().hex}.png"
+                result_path = os.path.join("static", result_name)
+                result_img.save(result_path)
+                print(f"💾 Saved result to: {result_path}")
+                return render_template("index.html", result_img=result_name,
+                                       debug=debug, debug_steps=debug_steps)
             except Exception as e:
-                return f'🔥 Forecast pipeline crashed: {str(e)}'
-    return '''
-    <!doctype html>
-    <title>Chart Forecast App</title>
-    <h1>📤 Upload a 24-Hour Chart Screenshot</h1>
-    <form method=post enctype=multipart/form-data>
-      <input type=file name=screenshot>
-      <input type=submit value=Upload>
-    </form>
-    '''
+                print(f"🔥 Forecast error: {e}")
+                return f"🔥 Forecast error: {e}", 500
 
-@app.route('/static/<path:filename>')
-def static_file(filename):
-    return send_from_directory(app.config['STATIC_FOLDER'], filename)
+    return render_template("index.html", result_img=None, debug=debug, debug_steps=[])
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)

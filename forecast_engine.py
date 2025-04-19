@@ -3,29 +3,27 @@ import pickle
 import numpy as np
 from PIL import Image
 from sklearn.metrics.pairwise import cosine_similarity
-import torch
 from utils import extract_embedding, generate_overlay_forecast
 
 def process_forecast_pipeline(query_img):
-    # Load embeddings from pickle
+    # Load embeddings
     emb_path = os.path.join("data", "embeddings.pkl")
-    with open(emb_path, 'rb') as f:
-        data_embeddings = pickle.load(f)  # dict filename -> numpy array
-
+    with open(emb_path, "rb") as f:
+        data_embeddings = pickle.load(f)
     filenames = list(data_embeddings.keys())
     vectors = np.stack([data_embeddings[f] for f in filenames])
 
     # Compute query embedding
     q = extract_embedding(query_img).numpy()[None, :]
 
-    # Cosine similarity
+    # Find best match
     sims = cosine_similarity(q, vectors)[0]
-    idx = int(np.argmax(sims))
-    best_name, best_score = filenames[idx], sims[idx]
+    best_idx = int(np.argmax(sims))
+    best_name, best_score = filenames[best_idx], sims[best_idx]
     print(f"🤝 Best match: {best_name} (cosine={best_score:.4f})")
 
-    # Load best match image
-    match_img = Image.open(os.path.join("data","screenshots", best_name)).convert("RGB")
+    # Load best image
+    match_img = Image.open(os.path.join("data","screenshots",best_name)).convert("RGB")
 
-    # Generate forecast overlay
+    # Overlay forecast
     return generate_overlay_forecast(query_img, match_img)

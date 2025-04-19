@@ -1,4 +1,3 @@
-# forecast_engine.py
 import os
 import torch
 import numpy as np
@@ -7,6 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import cv2
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
+from io import BytesIO
 from utils import extract_embedding
 
 def process_forecast_pipeline(query_img, top_k=3, debug=False):
@@ -42,14 +42,15 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
         fig, ax = plt.subplots()
         im = ax.imshow(corr, cmap="viridis", norm=Normalize(0,1))
         ax.axis("off")
-        fig.canvas.draw()
-        heatsrc = np.frombuffer(fig.canvas.tostring_rgb(), dtype="uint8")
-        heatsrc = heatsrc.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        # save to buffer
+        buf = BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
+        buf.seek(0)
+        heatsrc = Image.open(buf).convert("RGB")
         plt.close(fig)
-        steps.append((f"🔍 Correlation Heatmap #{rank+1}", Image.fromarray(heatsrc)))
+        steps.append((f"🔍 Correlation Heatmap #{rank+1}", heatsrc))
 
         # 3) ORB matches
-        # a) contrast-enhance & gray
         def prep(img):
             c = ImageEnhance.Contrast(img).enhance(1.5)
             g = cv2.cvtColor(np.array(c), cv2.COLOR_RGB2GRAY)

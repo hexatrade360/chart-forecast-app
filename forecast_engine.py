@@ -1,12 +1,10 @@
 
 import os
 import numpy as np
-import cv2
+from PIL import Image, ImageDraw
 import torch
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageEnhance
 from sklearn.metrics.pairwise import cosine_similarity
 from utils import extract_embedding
 
@@ -15,99 +13,68 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
     data_embeddings = torch.load(emb_path)
     names = list(data_embeddings.keys())
     vecs = np.stack([data_embeddings[n].detach().numpy() for n in names])
-
+    
     q = extract_embedding(query_img).detach().numpy()[None, :]
     sims = cosine_similarity(q, vecs)[0]
     top_idxs = sims.argsort()[-top_k:][::-1]
 
+    best_overlay = None
     steps = []
-    final_overlay = None
 
     for rank, idx in enumerate(top_idxs):
-        name, score = names[idx], sims[idx]
+        name = names[idx]
         match_img = Image.open(os.path.join("data", "screenshots", name)).convert("RGB")
-        steps.append((f"Match #{rank+1}: {name} (score={score:.4f})", match_img))
-
-        qg = np.array(query_img.convert('L').resize((224, 224))) / 255.0
-        mg = np.array(match_img.convert('L').resize((224, 224))) / 255.0
-        corr = qg * mg
-        fig, ax = plt.subplots()
-        im = ax.imshow(corr, cmap='viridis', norm=Normalize(0, 1))
-        ax.axis('off')
-        buf = BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        buf.seek(0)
-        heat = Image.open(buf).convert("RGB")
-        plt.close(fig)
-        steps.append((f"🔍 Correlation Heatmap #{rank+1}", heat))
-
-        def prep(img):
-            c = ImageEnhance.Contrast(img).enhance(1.5)
-            g = cv2.cvtColor(np.array(c), cv2.COLOR_RGB2GRAY)
-            return cv2.GaussianBlur(g, (3, 3), 0)
-
-        kp1, d1 = cv2.ORB_create(500).detectAndCompute(prep(query_img), None)
-        kp2, d2 = cv2.ORB_create(500).detectAndCompute(prep(match_img), None)
-        if d1 is not None and d2 is not None:
-            matches = sorted(cv2.BFMatcher(cv2.NORM_HAMMING, True).match(d1, d2), key=lambda x: x.distance)[:25]
-            orb = cv2.drawMatches(np.array(query_img), kp1, np.array(match_img), kp2,
-                                  matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-            steps.append((f"🔗 ORB Matches #{rank+1}", Image.fromarray(orb)))
-
-        w, h = query_img.size
-        mid = w // 2
-        overlay = query_img.convert("RGBA")
-        forecast_crop = match_img.resize((w, h)).crop((mid, 0, w, h)).convert("RGBA")
-        mask = forecast_crop.split()[-1].point(lambda p: 128)
-        overlay.paste(forecast_crop, (mid, 0), mask)
-
-        arr = np.array(overlay.convert("RGB"))
-        red_mask = (arr[:, :, 0] > 200) & (arr[:, :, 1] < 80) & (arr[:, :, 2] < 80)
-        prop_red = red_mask.sum(axis=0) / h
-        red_cols = np.where(prop_red > 0.02)[0]
-        split = red_cols[-1] if len(red_cols) >= 2 else int(np.argmax(prop_red))
-
-        draw = ImageDraw.Draw(overlay)
-        draw.line([(split, 0), (split, h)], fill=(255, 0, 0), width=2)
-        ov_rgb = overlay.convert("RGB")
-        steps.append((f"📈 Overlay #{rank+1}", ov_rgb))
+        match_img = match_img.resize(query_img.size)
 
         if rank == 0:
-            left = ov_rgb.crop((0, 0, split + 1, h))
-            right = ov_rgb.crop((split + 1, 0, w, h))
-            rh, rw = right.size[1], right.size[0]
-            arr_r = np.array(right)
-            y0, y1 = int(0.1 * rh), int(0.9 * rh)
-            gray = np.dot(arr_r[y0:y1], [0.299, 0.587, 0.114])
-            dark = gray < 200
-            minp = int(0.01 * (y1 - y0))
-            coords = [(x, int(np.median(np.where(dark[:, x])[0])) + y0)
-                      for x in range(rw) if len(np.where(dark[:, x])[0]) >= minp]
+            arr = np.array(query_img)
+            h, w = arr.shape[:2]
 
-            arr_l = np.array(left)
-            grayl = np.dot(arr_l[y0:y1], [0.299, 0.587, 0.114])
-            darkl = grayl < 200
-            col_idx = -2 if darkl.shape[1] > 2 else -1
-            ys = np.where(darkl[:, col_idx])[0]
-            if len(ys) >= minp:
-                y_med = int(np.median(ys)) + y0
-            else:
-                y_med = int((y0 + y1) / 2)
-            full = [(0, y_med)] + coords
-            blank = Image.new("RGB", (rw, rh), (255, 255, 255))
-            draw2 = ImageDraw.Draw(blank)
-            if full:
-                draw2.line(full, fill=(0, 0, 255), width=3)
-            combo = Image.new("RGB", (w, h))
-            combo.paste(left, (0, 0))
-            combo.paste(blank, (split + 1, 0))
-            cx, cy = int(0.1 * w), int(0.1 * h)
-            final = combo.crop((cx, cy, w - cx, h - cy))
-            final_overlay = final
-            steps.append(("🔵 Forecast Line Only", blank))
+            # Detect manual red line
+            red_mask = (arr[:, :, 0] > 200) & (arr[:, :, 1] < 80) & (arr[:, :, 2] < 80)
+            red_column_ratios = red_mask.sum(axis=0) / h
+            red_columns = np.where(red_column_ratios > 0.5)[0]
+            if len(red_columns) == 0:
+                raise ValueError("❌ No red vertical line found in query image.")
+            split_x = red_columns[0]
+
+            # Split
+            left_region = query_img.crop((0, 0, split_x, h))
+            right_region = match_img.crop((split_x, 0, w, h))
+
+            # Trace blue line
+            arr_right = np.array(right_region)
+            y0, y1 = int(0.1 * h), int(0.9 * h)
+            gray = np.dot(arr_right[y0:y1], [0.299, 0.587, 0.114])
+            dark = gray < 200
+            min_pix = int(0.01 * (y1 - y0))
+            coords = [(x, int(np.median(np.where(dark[:, x])[0])) + y0)
+                      for x in range(arr_right.shape[1])
+                      if len(np.where(dark[:, x])[0]) >= min_pix]
+
+            arr_left = np.array(left_region)
+            gray_l = np.dot(arr_left[y0:y1], [0.299, 0.587, 0.114])
+            dark_l = gray_l < 200
+            col_idx = arr_left.shape[1] - 2
+            ys_l = np.where(dark_l[:, col_idx])[0]
+            y_med_l = int(np.median(ys_l)) + y0 if len(ys_l) >= min_pix else int((y0 + y1) / 2)
+
+            full_coords = [(0, y_med_l)] + coords
+            blank_right = Image.new("RGB", (right_region.size), (255, 255, 255))
+            draw = ImageDraw.Draw(blank_right)
+            draw.line(full_coords, fill=(0, 0, 255), width=3)
+
+            combined = Image.new("RGB", (w, h))
+            combined.paste(left_region, (0, 0))
+            combined.paste(blank_right, (split_x, 0))
+
+            crop_x = int(0.10 * w)
+            crop_y = int(0.10 * h)
+            final = combined.crop((crop_x, crop_y, w - crop_x, h - crop_y))
+
             steps.append(("Final Cropped Output", final))
-            final_overlay = final
+            best_overlay = final
 
     if debug:
-        return final_overlay, steps
-    return final_overlay
+        return best_overlay, steps
+    return best_overlay

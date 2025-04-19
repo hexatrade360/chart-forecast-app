@@ -1,20 +1,18 @@
-<!DOCTYPE html>
-<html>
-<head><title>Chart Forecast</title></head>
-<body>
-    <h1>Upload Chart Screenshot</h1>
-    <form method="POST" enctype="multipart/form-data">
-        <input type="file" name="query_image" accept="image/*" required>
-        <button type="submit">Upload & Forecast</button>
-    </form>
+<form method="post" enctype="multipart/form-data">
+  <input type="file" name="query_image" required>
+  <label><input type="checkbox" name="debug"> Debug mode (show all steps)</label>
+  <button type="submit">Upload & Forecast</button>
+</form>
 
-    <form method="POST" action="/reload">
-        <button type="submit">Reload Model</button>
-    </form>
-
-    {% if result_img %}
-        <h2>Forecast Result</h2>
-        <img src="{{ url_for('static', filename=result_img) }}" width="800">
-    {% endif %}
-</body>
-</html>
+{% if debug %}
+  <h2>Debug Outputs</h2>
+  {% for step in debug_steps %}
+    <div style="margin-bottom:1em;">
+      <h4>{{ step.label }}</h4>
+      <img src="{{ step.url }}" style="max-width:80%;">
+    </div>
+  {% endfor %}
+{% elif result_img %}
+  <h2>Final Overlay</h2>
+  <img src="static/{{ result_img }}" style="max-width:80%;">
+{% endif %}

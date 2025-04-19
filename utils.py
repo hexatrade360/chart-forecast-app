@@ -67,68 +67,65 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-def crop_chart_body(img: Image.Image) -> Image.Image:
-    """No cropping on processing; return full image."""
-    return img
-
 def extract_embedding(img: Image.Image) -> torch.Tensor:
-    """Compute embedding for a PIL Image."""
-    body = crop_chart_body(img)
+    body = img  # no crop during embedding
     tensor = transform(body).unsqueeze(0).to(device)
     with torch.no_grad():
         emb = load_model()(tensor).squeeze().cpu()
     return emb
 
-# ─── Forecast Overlay ─────────────────────────────────────────────────────────
 def generate_overlay_forecast(query_img: Image.Image, match_img: Image.Image) -> Image.Image:
+    # First overlay step (as before)
     w, h = query_img.size
     mid = w // 2
-
-    # Split into left (query) and right (forecast)
     left = query_img.crop((0, 0, mid, h))
     match_resized = match_img.resize((w, h))
-    right = match_resized.crop((mid, 0, w, h))
+    overlay = Image.new("RGB", (w, h))
+    overlay.paste(left, (0,0))
+    overlay.paste(match_resized.crop((mid,0,w,h)), (mid,0))
 
-    # Trace forecast line on right half
-    rh, rw = right.size[1], right.size[0]
-    arr = np.array(right)
+    # Draw red split line
+    draw0 = ImageDraw.Draw(overlay)
+    draw0.line([(mid,0),(mid,h)], fill=(255,0,0), width=2)
+
+    # Now apply your blue-line logic:
+    arr = np.array(overlay)
+    red_mask = (arr[:,:,0] > 200) & (arr[:,:,1] < 80) & (arr[:,:,2] < 80)
+    prop_red = red_mask.sum(axis=0) / h
+    red_cols = np.where(prop_red > 0.02)[0]
+    x_split = red_cols[-1] if len(red_cols) >= 2 else int(np.argmax(prop_red))
+
+    left_region  = overlay.crop((0, 0, x_split+1, h))
+    right_region = overlay.crop((x_split+1, 0, w, h))
+
+    rh, rw = right_region.size[1], right_region.size[0]
+    arr_r = np.array(right_region)
     y0, y1 = int(0.10*rh), int(0.90*rh)
-    gray = np.dot(arr[y0:y1], [0.299, 0.587, 0.114])
-    mask = gray < 200
-    minpix = int(0.01*(y1-y0))
-    coords = [(x, int(np.median(np.where(mask[:,x])[0])) + y0)
-              for x in range(rw) if len(np.where(mask[:,x])[0]) >= minpix]
+    gray = np.dot(arr_r[y0:y1], [0.299,0.587,0.114])
+    dark = gray < 200
+    min_pix = int(0.01*(y1-y0))
+    coords = [(x, int(np.median(np.where(dark[:,x])[0])) + y0)
+              for x in range(rw) if len(np.where(dark[:,x])[0]) >= min_pix]
 
-    # Continuity from left half
-    arrl = np.array(left)
-    grayl = np.dot(arrl[y0:y1], [0.299, 0.587, 0.114])
-    maskl = grayl < 200
-    ys = np.where(maskl[:, -1])[0]
-    if len(ys) >= minpix:
-        y0l = int(np.median(ys)) + y0
+    arr_l = np.array(left_region)
+    gray_l = np.dot(arr_l[y0:y1], [0.299,0.587,0.114])
+    dark_l = gray_l < 200
+    ys_l = np.where(dark_l[:, -2])[0]
+    if len(ys_l) >= min_pix:
+        y_med_l = int(np.median(ys_l)) + y0
     else:
-        y0l = (y0 + y1) // 2
-    full_coords = [(0, y0l)] + coords
+        y_med_l = int((y0+y1)/2)
+    full_coords = [(0, y_med_l)] + coords
 
-    # Smooth line (5-point moving average)
-    if full_coords:
-        xs, ys = zip(*full_coords)
-        ys_sm = np.convolve(ys, np.ones(5)/5, mode='same').astype(int)
-        full_coords = list(zip(xs, ys_sm))
-
-    # Draw blue forecast line on blank canvas
     blank = Image.new("RGB", (rw, rh), (255,255,255))
-    draw = ImageDraw.Draw(blank)
+    draw1 = ImageDraw.Draw(blank)
     if full_coords:
-        draw.line(full_coords, fill=(0,0,255), width=3)
+        draw1.line(full_coords, fill=(0,0,255), width=3)
 
-    # Combine and draw red split line
-    combined = Image.new("RGB", (w, h), (255,255,255))
-    combined.paste(left, (0,0))
-    combined.paste(blank, (mid,0))
-    draw2 = ImageDraw.Draw(combined)
-    draw2.line([(mid,0),(mid,h)], fill=(255,0,0), width=2)
+    combined = Image.new("RGB", (w,h))
+    combined.paste(left_region, (0,0))
+    combined.paste(blank, (x_split+1,0))
 
-    # Final cropping of 10% margins to remove whitespace
-    cx, cy = int(0.1*w), int(0.1*h)
+    # Final crop of 10% margins:
+    cx, cy = int(0.10*w), int(0.10*h)
     return combined.crop((cx, cy, w-cx, h-cy))

@@ -61,77 +61,77 @@ transform = transforms.Compose([
 ])
 
 def extract_embedding(img: Image.Image) -> torch.Tensor:
-    """Crop, transform, and run through embedding net."""
     tensor = transform(img).unsqueeze(0).to(device)
     with torch.no_grad():
         emb = load_model()(tensor).squeeze().cpu()
     return emb
 
 def generate_overlay_forecast(query_img: Image.Image, match_img: Image.Image) -> Image.Image:
-    """
-    1) Detect where the colored candles end in the query image (dynamic red line)
-    2) Paste forecast from match image
-    3) Draw red split line
-    4) Trace blue forecast line off that split
-    5) Crop 10% margins
-    """
-    # — detect split column by colored candles (red or green)
-    arr_q = np.array(query_img.convert("RGB"))
-    h, w = arr_q.shape[:2]
-    R, G, B = arr_q[:,:,0], arr_q[:,:,1], arr_q[:,:,2]
-    # mask red candles OR green candles
-    red_mask   = (R > 200) & (G < 100) & (B < 100)
-    green_mask = (G > 200) & (R < 100) & (B < 100)
-    mask_color = red_mask | green_mask
-    col_counts = mask_color.sum(axis=0)
-    # ignore tiny noise; require ≥1% of height
-    minpix = int(0.01 * h)
-    valid = col_counts[:int(0.8 * w)]  # skip far-right padding
-    candle_cols = np.where(valid > minpix)[0]
-    x_split = int(candle_cols[-1] if len(candle_cols) else w // 2)
+    # image dims
+    w, h = query_img.size
 
-    # — build RGBA overlay
+    # 1) define chart-body crop (10% margins)
+    left_cut, right_cut = int(0.1*w), int(0.9*w)
+    top_cut, bottom_cut = int(0.1*h), int(0.9*h)
+    body = query_img.crop((left_cut, top_cut, right_cut, bottom_cut))
+    arr = np.array(body)
+
+    # 2) detect ANY non‑white pixel as candle (R<240 or G<240 or B<240)
+    mask = np.any(arr < 240, axis=2)
+    col_counts = mask.sum(axis=0)
+    minpix = int(0.01 * (bottom_cut - top_cut))
+    valid = col_counts  # already just body-width columns
+    candle_cols = np.where(valid > minpix)[0]
+
+    # 3) relative split in body, then absolute in full image
+    if len(candle_cols):
+        rel_split = candle_cols[-1]
+    else:
+        rel_split = (right_cut - left_cut)//2
+    x_split = left_cut + int(rel_split)
+
+    # 4) build overlay: paste forecast region
     overlay = query_img.convert("RGBA")
     m = match_img.resize((w, h)).convert("RGBA")
     fc = m.crop((x_split, 0, w, h))
     mask_fc = fc.split()[-1].point(lambda p: 128)
     overlay.paste(fc, (x_split, 0), mask_fc)
 
-    # — draw red split line
+    # 5) draw red line
     draw = ImageDraw.Draw(overlay)
     draw.line([(x_split, 0), (x_split, h)], fill=(255, 0, 0), width=2)
 
-    # — trace blue forecast line
+    # 6) trace blue forecast line
     left  = overlay.crop((0, 0, x_split, h))
     right = overlay.crop((x_split, 0, w, h))
     arr_r = np.array(right)
     rh, rw = arr_r.shape[:2]
-    y0, y1 = int(0.1 * rh), int(0.9 * rh)
-    gray_r = np.dot(arr_r[y0:y1], [0.299, 0.587, 0.114])
-    dark_r = gray_r < 200
-    minp = int(0.01 * (y1 - y0))
+    y0, y1 = int(0.1*rh), int(0.9*rh)
+    gray = np.dot(arr_r[y0:y1], [0.299, 0.587, 0.114])
+    dark = gray < 200
+    minp = int(0.01*(y1-y0))
 
     coords = [
-        (x, int(np.median(np.where(dark_r[:, x])[0])) + y0)
+        (x, int(np.median(np.where(dark[:,x])[0]))+y0)
         for x in range(rw)
-        if len(np.where(dark_r[:, x])[0]) >= minp
+        if len(np.where(dark[:,x])[0]) >= minp
     ]
 
     arr_l = np.array(left)
     gray_l = np.dot(arr_l[y0:y1], [0.299, 0.587, 0.114])
     dark_l = gray_l < 200
     ys = np.where(dark_l[:, -2])[0]
-    y_med = int(np.median(ys)) + y0 if len(ys) >= minp else (y0 + y1) // 2
-    full_coords = [(0, y_med)] + coords
+    ymed = int(np.median(ys))+y0 if len(ys)>=minp else (y0+y1)//2
+    full = [(0, ymed)] + coords
 
     blank = Image.new("RGB", (rw, rh), (255, 255, 255))
     d2 = ImageDraw.Draw(blank)
-    if full_coords:
-        d2.line(full_coords, fill=(0, 0, 255), width=3)
+    if full:
+        d2.line(full, fill=(0,0,255), width=3)
 
-    # — reassemble & crop margins
+    # 7) reassemble & final crop
     combined = Image.new("RGB", (w, h))
-    combined.paste(left.convert("RGB"), (0, 0))
-    combined.paste(blank, (x_split, 0))
-    cx, cy = int(0.1 * w), int(0.1 * h)
-    return combined.crop((cx, cy, w - cx, h - cy))
+    combined.paste(left.convert("RGB"), (0,0))
+    combined.paste(blank,  (x_split,0))
+    cx, cy = int(0.1*w), int(0.1*h)
+    return combined.crop((cx, cy, w-cx, h-cy))

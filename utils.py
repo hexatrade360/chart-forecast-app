@@ -68,11 +68,8 @@ transform = transforms.Compose([
 ])
 
 def crop_chart_body(img: Image.Image) -> Image.Image:
-    """Crop 10% border from all sides."""
-    w, h = img.size
-    left, right = int(0.1*w), int(0.9*w)
-    top, bottom = int(0.1*h), int(0.9*h)
-    return img.crop((left, top, right, bottom))
+    """No cropping on processing; return full image."""
+    return img
 
 def extract_embedding(img: Image.Image) -> torch.Tensor:
     """Compute embedding for a PIL Image."""
@@ -95,7 +92,7 @@ def generate_overlay_forecast(query_img: Image.Image, match_img: Image.Image) ->
     # Trace forecast line on right half
     rh, rw = right.size[1], right.size[0]
     arr = np.array(right)
-    y0, y1 = int(0.1*rh), int(0.9*rh)
+    y0, y1 = int(0.10*rh), int(0.90*rh)
     gray = np.dot(arr[y0:y1], [0.299, 0.587, 0.114])
     mask = gray < 200
     minpix = int(0.01*(y1-y0))
@@ -132,6 +129,6 @@ def generate_overlay_forecast(query_img: Image.Image, match_img: Image.Image) ->
     draw2 = ImageDraw.Draw(combined)
     draw2.line([(mid,0),(mid,h)], fill=(255,0,0), width=2)
 
-    # Crop 10% margins
+    # Final cropping of 10% margins to remove whitespace
     cx, cy = int(0.1*w), int(0.1*h)
     return combined.crop((cx, cy, w-cx, h-cy))

@@ -9,3 +9,4 @@ gunicorn
 torch
 torchvision
 boto3
+scikit-learn

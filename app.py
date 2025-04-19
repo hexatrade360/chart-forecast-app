@@ -1,8 +1,9 @@
-# ✅ Full Logging to Trace Forecast Upload & Processing
+# ✅ app.py with cache-busting unique result filenames
 
 from flask import Flask, request, render_template, redirect, url_for
 from PIL import Image
 import os
+import uuid
 from werkzeug.utils import secure_filename
 from forecast_engine import process_forecast_pipeline
 
@@ -16,6 +17,7 @@ os.makedirs(STATIC_FOLDER, exist_ok=True)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    result_img = None
     if request.method == "POST":
         print("🟡 POST request received")
         if "query_image" not in request.files:
@@ -32,20 +34,22 @@ def index():
             query_img = Image.open(filepath).convert("RGB")
             print("🧠 Loaded image into PIL")
 
-            result_img = process_forecast_pipeline(query_img)
+            result_img_obj = process_forecast_pipeline(query_img)
             print("✅ Forecast pipeline returned result")
 
-            result_path = os.path.join(STATIC_FOLDER, "result.png")
-            result_img.save(result_path)
+            # use a unique filename to avoid caching issues
+            result_filename = f"result_{uuid.uuid4().hex}.png"
+            result_path = os.path.join(STATIC_FOLDER, result_filename)
+            result_img_obj.save(result_path)
             print("💾 Saved result to:", result_path)
+
+            result_img = result_filename
 
         except Exception as e:
             print("🔥 Forecast pipeline crashed:", str(e))
             raise
 
-        return render_template("index.html", result_img="result.png")
-
-    return render_template("index.html", result_img=None)
+    return render_template("index.html", result_img=result_img)
 
 @app.route("/reload", methods=["POST"])
 def reload_model():

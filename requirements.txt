@@ -8,3 +8,4 @@ scikit-learn
 gunicorn
 torch
 torchvision
+boto3

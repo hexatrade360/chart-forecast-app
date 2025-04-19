@@ -1,68 +1,70 @@
-from flask import Flask, request, render_template
+import os
+from flask import Flask, request, render_template_string, send_from_directory
 from werkzeug.utils import secure_filename
 from PIL import Image
-import os
-import uuid
-
 from forecast_engine import process_forecast_pipeline
 
-app = Flask(__name__)
+UPLOAD_FOLDER = 'uploads'
+STATIC_FOLDER = 'static'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
-UPLOAD_FOLDER = "uploads"
-STATIC_FOLDER = "static"
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['STATIC_FOLDER'] = STATIC_FOLDER
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(STATIC_FOLDER, exist_ok=True)
 
-@app.route("/", methods=["GET", "POST"])
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    result_img = None
-    debug = False
-    debug_steps = []
+    if request.method == 'POST':
+        if 'screenshot' not in request.files:
+            return '❌ No file part'
+        file = request.files['screenshot']
+        if file.filename == '':
+            return '❌ No selected file'
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
 
-    if request.method == "POST":
-        # Check debug mode checkbox
-        debug = request.form.get("debug") == "on"
+            try:
+                img = Image.open(file_path).convert("RGB")
+                overlay, steps = process_forecast_pipeline(img, debug=True)
 
-        # Save uploaded file
-        file = request.files.get("query_image")
-        if not file:
-            return "No file uploaded", 400
-        filename = secure_filename(file.filename)
-        input_path = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(input_path)
+                # Save result image
+                output_path = os.path.join(app.config['STATIC_FOLDER'], f"result_{filename}")
+                overlay.save(output_path)
 
-        # Open and process
-        query_img = Image.open(input_path).convert("RGB")
-        if debug:
-            # Returns overlay + list of (label, PIL.Image)
-            overlay, steps = process_forecast_pipeline(query_img, debug=True)
-            # Save each debug step
-            uid = uuid.uuid4().hex
-            for i, (label, img) in enumerate(steps):
-                outname = f"debug_{uid}_{i}.png"
-                outpath = os.path.join(STATIC_FOLDER, outname)
-                img.save(outpath)
-                debug_steps.append({
-                    "label": label,
-                    "url": f"static/{outname}"
-                })
-        else:
-            # Just the final overlay
-            overlay = process_forecast_pipeline(query_img, debug=False)
+                # Build HTML debug output
+                html = f'<h2>✅ Forecast generated for: {filename}</h2>'
+                html += f'<h3>📈 Final Forecast Result:</h3><img src="/static/result_{filename}" width="600"><hr>'
 
-        # Save final overlay
-        outname = f"result_{uuid.uuid4().hex}.png"
-        outpath = os.path.join(STATIC_FOLDER, outname)
-        overlay.save(outpath)
-        result_img = outname
+                for title, step_img in steps:
+                    step_name = f"{title.replace(' ','_').replace('#','')}_{filename}"
+                    step_path = os.path.join(app.config['STATIC_FOLDER'], step_name + ".png")
+                    step_img.save(step_path)
+                    html += f'<h4>{title}</h4><img src="/static/{step_name}.png" width="600"><br><br>'
 
-    return render_template(
-        "index.html",
-        result_img=result_img,
-        debug=debug,
-        debug_steps=debug_steps
-    )
+                return render_template_string(html)
+            except Exception as e:
+                return f'🔥 Forecast pipeline crashed: {str(e)}'
+    return '''
+    <!doctype html>
+    <title>Chart Forecast App</title>
+    <h1>📤 Upload a 24-Hour Chart Screenshot</h1>
+    <form method=post enctype=multipart/form-data>
+      <input type=file name=screenshot>
+      <input type=submit value=Upload>
+    </form>
+    '''
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+@app.route('/static/<path:filename>')
+def static_file(filename):
+    return send_from_directory(app.config['STATIC_FOLDER'], filename)
+
+if __name__ == '__main__':
+    app.run(debug=True)

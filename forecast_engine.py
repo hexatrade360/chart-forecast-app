@@ -10,11 +10,13 @@ from sklearn.metrics.pairwise import cosine_similarity
 from utils import extract_embedding
 
 def process_forecast_pipeline(query_img, top_k=3, debug=False):
+    # Load embeddings
     emb_path = os.path.join("data","embeddings.pth")
     data_embeddings = torch.load(emb_path)
     names = list(data_embeddings.keys())
     vecs = np.stack([data_embeddings[n].numpy() for n in names])
 
+    # Compute similarities
     q = extract_embedding(query_img).numpy()[None,:]
     sims = cosine_similarity(q, vecs)[0]
     top_idxs = sims.argsort()[-top_k:][::-1]
@@ -24,9 +26,11 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
 
     for rank, idx in enumerate(top_idxs):
         name, score = names[idx], sims[idx]
+        steps.append((f"Match #{rank+1}: {name} (score={score:.4f})",
+                      Image.open(os.path.join("data","screenshots",name)).convert("RGB")))
         match_img = Image.open(os.path.join("data","screenshots",name)).convert("RGB")
-        steps.append((f"Match #{rank+1}: {name} (score={score:.4f})", match_img))
 
+        # Correlation Heatmap
         qg = np.array(query_img.convert('L').resize((224,224))) / 255.0
         mg = np.array(match_img.convert('L').resize((224,224))) / 255.0
         corr = qg * mg
@@ -40,6 +44,7 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
         plt.close(fig)
         steps.append((f"🔍 Correlation Heatmap #{rank+1}", heat))
 
+        # ORB Matches
         def prep(img):
             c = ImageEnhance.Contrast(img).enhance(1.5)
             g = cv2.cvtColor(np.array(c), cv2.COLOR_RGB2GRAY)
@@ -55,6 +60,7 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
                                   flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
             steps.append((f"🔗 ORB Matches #{rank+1}", Image.fromarray(orb)))
 
+        # Initial Overlay with red line
         w,h = query_img.size
         mid = w//2
         overlay = query_img.convert("RGBA")
@@ -67,6 +73,7 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
         steps.append((f"📈 Overlay #{rank+1}", ov_rgb))
 
         if rank == 0:
+            # Apply blue-line logic to best overlay
             arr = np.array(ov_rgb)
             rm = (arr[:,:,0]>200)&(arr[:,:,1]<80)&(arr[:,:,2]<80)
             prop = rm.sum(axis=0)/h
@@ -86,7 +93,10 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
             grayl = np.dot(arr_l[y0:y1], [0.299,0.587,0.114])
             darkl = grayl<200
             ys = np.where(darkl[:,-2])[0]
-            y_med = int(np.median(ys))+y0 if len(ys)>=minp else int((y0+y1)/2)
+            if len(ys)>=minp:
+                y_med = int(np.median(ys))+y0
+            else:
+                y_med = int((y0+y1)/2)
             full = [(0,y_med)] + coords
             blank = Image.new("RGB",(rw,rh),(255,255,255))
             draw2 = ImageDraw.Draw(blank)
@@ -97,6 +107,7 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
             combo.paste(blank,(split+1,0))
             cx,cy = int(0.1*w), int(0.1*h)
             final = combo.crop((cx,cy,w-cx,h-cy))
+            final_overlay = final
             steps.append(("🔵 Forecast Line Only", blank))
             steps.append(("Final Cropped Output", final))
             final_overlay = final

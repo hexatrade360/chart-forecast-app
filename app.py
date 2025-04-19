@@ -1,20 +1,42 @@
-# ✅ Version: manual-red-line v1.1 — stable forecast overlay with manual red line support
 
-from flask import Flask, render_template, request, send_file
+import os
+from flask import Flask, render_template, request, send_from_directory
 from PIL import Image
 from forecast_engine import process_forecast_pipeline
-import os
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static")
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         file = request.files["query"]
-        if file:
-            img = Image.open(file.stream).convert("RGB")
-            result_img = process_forecast_pipeline(img)
-            result_path = "static/result.png"
-            result_img.save(result_path)
-            return render_template("index.html", result_img=result_path)
-    return render_template("index.html", result_img=None)
+        if not file:
+            return "❌ No file uploaded", 400
+
+        # Save uploaded file
+        filepath = os.path.join("uploads", file.filename)
+        os.makedirs("uploads", exist_ok=True)
+        file.save(filepath)
+        print(f"📂 Saved uploaded file to: {filepath}")
+
+        query_img = Image.open(filepath).convert("RGB")
+
+        try:
+            overlay, steps = process_forecast_pipeline(query_img, debug=True)
+            result_path = os.path.join("static", f"result_{os.path.basename(filepath)}")
+            overlay.save(result_path)
+            print(f"💾 Saved result to: {result_path}")
+        except Exception as e:
+            print(f"🔥 Forecast pipeline crashed: {e}")
+            return "❌ Forecast pipeline error", 500
+
+        return render_template("index.html", result_image=os.path.basename(result_path), steps=steps)
+
+    return render_template("index.html", result_image=None, steps=[])
+
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    return send_from_directory("static", filename)
+
+if __name__ == "__main__":
+    app.run(debug=True)

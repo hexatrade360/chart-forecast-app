@@ -1,4 +1,3 @@
-# ✅ Version: manual-red-line v1.1 — stable forecast overlay with manual red line support
 
 import os
 import numpy as np
@@ -9,7 +8,7 @@ from matplotlib.colors import Normalize
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageEnhance
 from sklearn.metrics.pairwise import cosine_similarity
-from utils import extract_embedding
+from utils import extract_embedding, extract_split_point
 
 def process_forecast_pipeline(query_img, top_k=3, debug=False):
     emb_path = os.path.join("data", "embeddings.pth")
@@ -23,63 +22,52 @@ def process_forecast_pipeline(query_img, top_k=3, debug=False):
 
     steps = []
     final_overlay = None
+    w, h = query_img.size
+    split_x = extract_split_point(query_img)
+
+    # DEBUG: Show split position
+    debug_img = query_img.copy()
+    draw_debug = ImageDraw.Draw(debug_img)
+    draw_debug.line([(split_x, 0), (split_x, h)], fill=(255, 0, 0), width=2)
+    steps.append((f"🔴 Detected Red Line @ x={split_x}", debug_img))
 
     for rank, idx in enumerate(top_idxs):
         name, score = names[idx], sims[idx]
         match_img = Image.open(os.path.join("data", "screenshots", name)).convert("RGB")
         steps.append((f"Match #{rank+1}: {name} (score={score:.4f})", match_img))
 
-        # Skip drawing red line if it already exists
-        arr = np.array(query_img)
-        red_mask = (arr[:,:,0] > 200) & (arr[:,:,1] < 80) & (arr[:,:,2] < 80)
-        red_cols = np.where(red_mask.sum(axis=0) > 0.02 * arr.shape[0])[0]
-        if len(red_cols) > 0:
-            split = red_cols[-1]
-        else:
-            split = query_img.size[0] // 2
+        qg = np.array(query_img.convert('L').resize((224,224))) / 255.0
+        mg = np.array(match_img.convert('L').resize((224,224))) / 255.0
+        corr = qg * mg
+        fig, ax = plt.subplots()
+        ax.imshow(corr, cmap='viridis', norm=Normalize(0,1))
+        ax.axis('off')
+        buf = BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        buf.seek(0)
+        heat = Image.open(buf).convert("RGB")
+        plt.close(fig)
+        steps.append((f"🔍 Correlation Heatmap #{rank+1}", heat))
 
-        forecast_crop = match_img.resize(query_img.size).crop((split, 0, query_img.size[0], query_img.size[1])).convert("RGBA")
-        overlay = query_img.convert("RGBA")
-        mask = forecast_crop.split()[-1].point(lambda p: 128)
-        overlay.paste(forecast_crop, (split, 0), mask)
-
-        steps.append((f"📈 Overlay #{rank+1}", overlay.convert("RGB")))
+        def prep(img):
+            c = ImageEnhance.Contrast(img).enhance(1.5)
+            g = cv2.cvtColor(np.array(c), cv2.COLOR_RGB2GRAY)
+            return cv2.GaussianBlur(g, (3,3), 0)
+        kp1, d1 = cv2.ORB_create(500).detectAndCompute(prep(query_img), None)
+        kp2, d2 = cv2.ORB_create(500).detectAndCompute(prep(match_img), None)
+        if d1 is not None and d2 is not None:
+            matches = sorted(cv2.BFMatcher(cv2.NORM_HAMMING, True).match(d1, d2), key=lambda x: x.distance)[:25]
+            orb = cv2.drawMatches(np.array(query_img), kp1, np.array(match_img), kp2, matches, None,
+                                  flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+            steps.append((f"🔗 ORB Matches #{rank+1}", Image.fromarray(orb)))
 
         if rank == 0:
-            # Extract blue forecast line
-            left = overlay.crop((0, 0, split, query_img.size[1]))
-            right = overlay.crop((split, 0, query_img.size[0], query_img.size[1]))
-            rh, rw = right.size[1], right.size[0]
-            arr_r = np.array(right)
-            y0, y1 = int(0.1*rh), int(0.9*rh)
-            gray = np.dot(arr_r[y0:y1], [0.299,0.587,0.114])
-            dark = gray < 200
-            minp = int(0.01 * (y1 - y0))
-            coords = [(x, int(np.median(np.where(dark[:,x])[0])) + y0)
-                      for x in range(rw) if len(np.where(dark[:,x])[0]) >= minp]
+            overlay = query_img.convert("RGBA")
+            forecast_crop = match_img.resize((w, h)).crop((split_x, 0, w, h)).convert("RGBA")
+            mask = forecast_crop.split()[-1].point(lambda p: 128)
+            overlay.paste(forecast_crop, (split_x, 0), mask)
+            ov_rgb = overlay.convert("RGB")
+            final_overlay = ov_rgb
+            steps.append(("📈 Final Forecast Overlay", ov_rgb))
 
-            arr_l = np.array(left)
-            grayl = np.dot(arr_l[y0:y1], [0.299,0.587,0.114])
-            darkl = grayl < 200
-            ys = np.where(darkl[:,-2])[0]
-            y_med = int(np.median(ys)) + y0 if len(ys) >= minp else int((y0 + y1) / 2)
-            full = [(0, y_med)] + coords
-
-            blank = Image.new("RGB", (rw, rh), (255,255,255))
-            draw2 = ImageDraw.Draw(blank)
-            if full:
-                draw2.line(full, fill=(0, 0, 255), width=3)
-
-            combo = Image.new("RGB", query_img.size)
-            combo.paste(left, (0, 0))
-            combo.paste(blank, (split, 0))
-
-            cx, cy = int(0.1 * query_img.size[0]), int(0.1 * query_img.size[1])
-            final = combo.crop((cx, cy, query_img.size[0]-cx, query_img.size[1]-cy))
-            final_overlay = final
-            steps.append(("🔵 Forecast Line Only", blank))
-            steps.append(("Final Cropped Output", final))
-
-    if debug:
-        return final_overlay, steps
-    return final_overlay
+    return (final_overlay, steps) if debug else final_overlay

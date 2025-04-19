@@ -69,24 +69,28 @@ def extract_embedding(img: Image.Image) -> torch.Tensor:
 
 def generate_overlay_forecast(query_img: Image.Image, match_img: Image.Image) -> Image.Image:
     """
-    1) Dynamically detect where the colored candles end in query_img,
-    2) Paste the forecast from match_img to its right,
-    3) Draw red split line,
-    4) Trace forecast candles into a blue line,
-    5) Crop 10% margins.
+    1) Detect where the colored candles end in the query image (dynamic red line)
+    2) Paste forecast from match image
+    3) Draw red split line
+    4) Trace blue forecast line off that split
+    5) Crop 10% margins
     """
-    # — detect split column on query
+    # — detect split column by colored candles (red or green)
     arr_q = np.array(query_img.convert("RGB"))
-    gray_q = np.dot(arr_q[...,:3], [0.299, 0.587, 0.114])
-    h, w = gray_q.shape
-    mask = gray_q < 250
-    counts = mask.sum(axis=0)
+    h, w = arr_q.shape[:2]
+    R, G, B = arr_q[:,:,0], arr_q[:,:,1], arr_q[:,:,2]
+    # mask red candles OR green candles
+    red_mask   = (R > 200) & (G < 100) & (B < 100)
+    green_mask = (G > 200) & (R < 100) & (B < 100)
+    mask_color = red_mask | green_mask
+    col_counts = mask_color.sum(axis=0)
+    # ignore tiny noise; require ≥1% of height
     minpix = int(0.01 * h)
-    valid = counts[: int(0.8 * w)]
-    cols = np.where(valid > minpix)[0]
-    x_split = int(cols[-1] if len(cols) else w // 2)
+    valid = col_counts[:int(0.8 * w)]  # skip far-right padding
+    candle_cols = np.where(valid > minpix)[0]
+    x_split = int(candle_cols[-1] if len(candle_cols) else w // 2)
 
-    # — build RGBA overlay with forecast pasted
+    # — build RGBA overlay
     overlay = query_img.convert("RGBA")
     m = match_img.resize((w, h)).convert("RGBA")
     fc = m.crop((x_split, 0, w, h))

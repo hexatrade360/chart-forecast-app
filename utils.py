@@ -1,5 +1,5 @@
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import torch
 import os
 import torchvision.transforms as transforms
@@ -21,7 +21,7 @@ class EmbeddingNet(torch.nn.Module):
     def forward(self, x):
         return self.base_model(x)
 
-# 🔍 Load the trained model weights
+# Cache model
 _model_cache = None
 def load_model():
     global _model_cache
@@ -48,11 +48,57 @@ def find_best_match(query_embedding, data_embeddings):
         if score < best_score:
             best_score = score
             best_match = fname
+    # Return full path here for simplicity
     return os.path.join("data", "screenshots", best_match)
 
-# 🖼 Generate overlay image
+# 🖼 Generate overlay image based on original notebook logic
 def generate_overlay_forecast(query_img, match_img):
-    query_np = np.array(query_img.resize((800, 400)))
-    match_np = np.array(match_img.resize((800, 400)))
-    combined = np.vstack((query_np[:200], match_np[200:]))
-    return Image.fromarray(combined)
+    # ensure same size
+    w, h = query_img.size
+    match_arr = np.array(match_img.resize((w, h)))
+    # detect split x on match image via red vertical line
+    red_mask = (match_arr[:,:,0] > 200) & (match_arr[:,:,1] < 80) & (match_arr[:,:,2] < 80)
+    prop_red = red_mask.sum(axis=0) / h
+    red_cols = np.where(prop_red > 0.02)[0]
+    if len(red_cols) >= 2:
+        x_split = int(red_cols[-1])
+    else:
+        x_split = int(np.argmax(prop_red))
+    # crop regions
+    left_region = query_img.crop((0, 0, x_split, h))
+    right_region = match_img.crop((x_split, 0, w, h))
+    # prepare forecast line blank canvas
+    rw, rh = right_region.size
+    arr_right = np.array(right_region)
+    y0, y1 = int(0.10 * rh), int(0.90 * rh)
+    gray = np.dot(arr_right[y0:y1], [0.299, 0.587, 0.114])
+    dark = gray < 200
+    min_pix = int(0.01 * (y1 - y0))
+    coords = []
+    for x in range(rw):
+        ys = np.where(dark[:, x])[0]
+        if len(ys) >= min_pix:
+            coords.append((x, int(np.median(ys)) + y0))
+    # connect from left boundary
+    arr_left = np.array(left_region)
+    gray_l = np.dot(arr_left[y0:y1], [0.299, 0.587, 0.114])
+    dark_l = gray_l < 200
+    col_idx = left_region.size[0] - 1
+    ys_l = np.where(dark_l[:, col_idx])[0]
+    if len(ys_l) >= min_pix:
+        y_med_l = int(np.median(ys_l)) + y0
+    else:
+        y_med_l = int((y0 + y1) / 2)
+    full_coords = [(0, y_med_l)] + coords
+    blank_right = Image.new('RGB', (rw, rh), (255, 255, 255))
+    draw = ImageDraw.Draw(blank_right)
+    draw.line(full_coords, fill=(0, 0, 255), width=3)
+    # reassemble
+    combined = Image.new('RGB', (w, h), (255,255,255))
+    combined.paste(left_region, (0,0))
+    combined.paste(blank_right, (x_split,0))
+    # crop padding
+    crop_x = int(0.10 * w)
+    crop_y = int(0.10 * h)
+    cropped = combined.crop((crop_x, crop_y, w - crop_x, h - crop_y))
+    return cropped

@@ -1,18 +1,58 @@
-<form method="post" enctype="multipart/form-data">
-  <input type="file" name="query" required>
-  <label><input type="checkbox" name="debug"> Debug mode (show all steps)</label>
-  <button type="submit">Upload & Forecast</button>
-</form>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chart Forecast App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2em;
+      background: #f7f7f7;
+    }
+    h1 {
+      color: #333;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #ccc;
+    }
+    form {
+      margin-bottom: 2em;
+    }
+    label {
+      display: inline-block;
+      margin-top: 1em;
+    }
+    button {
+      margin-top: 1em;
+      padding: 0.5em 1em;
+      font-size: 1em;
+    }
+  </style>
+</head>
+<body>
+  <h1>📈 Upload Screenshot for Forecast</h1>
+  
+  <form method="post" enctype="multipart/form-data">
+    <input type="file" name="query" required>
+    <label><input type="checkbox" name="debug"> Debug mode (show all steps)</label><br>
+    <button type="submit">Upload & Forecast</button>
+  </form>
 
-{% if debug %}
-  <h2>Debug Outputs</h2>
-  {% for step in debug_steps %}
-    <div style="margin-bottom:1em;">
-      <h4>{{ step.label }}</h4>
-      <img src="{{ step.url }}" style="max-width:80%;">
-    </div>
-  {% endfor %}
-{% elif result_img %}
-  <h2>Final Overlay</h2>
-  <img src="static/{{ result_img }}" style="max-width:80%;">
-{% endif %}
+  {% if debug %}
+    <h2>🔎 Debug Outputs</h2>
+    {% for step in debug_steps %}
+      <div style="margin-bottom:1em;">
+        <h4>{{ step.label }}</h4>
+        <img src="{{ step.url }}" alt="{{ step.label }}">
+      </div>
+    {% endfor %}
+  
+  {% elif result_img %}
+    <h2>✅ Final Overlay</h2>
+    <img src="static/{{ result_img }}" alt="Final Forecast Overlay">
+  {% endif %}
+
+</body>
+</html>

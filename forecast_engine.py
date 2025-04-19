@@ -37,6 +37,10 @@ def process_forecast_pipeline(query_img: Image.Image, top_k=3, debug=False):
 
     # ─── Compute similarities ─────────────────────────────────────────────────────
     q = extract_embedding(query_img).numpy()[None, :]
+    import numpy as np
+    qv = q.numpy().flatten()
+    print("▶ QUERY EMBEDDING FIRST 5:", qv[:5])
+    print("▶ QUERY EMBEDDING NORM:", np.linalg.norm(qv))
     sims = cosine_similarity(q, vecs)[0]
     top_idxs = sims.argsort()[-top_k:][::-1]
 
